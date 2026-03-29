@@ -146,10 +146,9 @@ mini-rag-chatbot/
 
 ## 👤 Author
 
-**Your Name**
-- GitHub: [@YOUR_USERNAME](https://github.com/YOUR_USERNAME)
-- LinkedIn: [linkedin.com/in/YOUR_PROFILE](https://linkedin.com/in/YOUR_PROFILE)
-
+**Ayushi Gumashta**
+- GitHub: [ayushi61293](https://github.com/ayushi61293)
+- LinkedIn: [ayushi-gumashta](https://linkedin.com/in/ayushi-gumashta)
 ---
 
 ## 📄 License

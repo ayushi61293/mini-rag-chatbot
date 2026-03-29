@@ -35,7 +35,8 @@ async def load_models():
     try:
         print("⏳ Loading embedding model...")
         embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-mpnet-base-v2"
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
+)
         )
         print("✅ Embeddings loaded")
 

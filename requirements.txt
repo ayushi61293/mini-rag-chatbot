@@ -1,7 +1,10 @@
-langchain
-openai
-faiss-cpu
-pypdf
-python-dotenv
 fastapi
 uvicorn
+python-dotenv
+langchain
+langchain-community
+langchain-huggingface
+langchain-groq
+faiss-cpu
+pypdf
+sentence-transformers

@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.env
+temp_uploaded.pdf
+temp.pdf
+pro.zip

@@ -60,7 +60,7 @@ User → HTML Frontend
 
 ### 1. Clone the repo
 ```bash
-git clone https://github.com/YOUR_USERNAME/mini-rag-chatbot.git
+git clone https://github.com/ayushi61293/mini-rag-chatbot.git
 cd mini-rag-chatbot
 ```
 

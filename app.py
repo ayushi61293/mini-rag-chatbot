@@ -1,4 +1,6 @@
 import os
+import re
+import tempfile
 from dotenv import load_dotenv
 from typing import List
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -24,9 +26,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Single shared index (demo design). For multi-user use, keep one index per session.
 vector_db = None
+all_docs = []          # all chunks, used by the tech-extraction shortcut
 embeddings = None
 llm = None
+
+TOP_K = 5              # one k everywhere: what the model reads == what sources show
+HISTORY_MESSAGES = 6   # last 3 exchanges
 
 
 @app.on_event("startup")
@@ -35,9 +42,8 @@ async def load_models():
     try:
         print("⏳ Loading embedding model...")
         embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
-        
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
         print("✅ Embeddings loaded")
 
         api_key = os.getenv("GROQ_API_KEY")
@@ -72,17 +78,20 @@ def health():
 
 @app.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)):
-    global vector_db
+    global vector_db, all_docs
+    tmp_path = None
     try:
-        if not file.filename.endswith(".pdf"):
+        if not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Only PDF files are supported.")
         if embeddings is None:
             raise HTTPException(status_code=503, detail="Models still loading. Please wait.")
 
-        tmp_path = "temp_uploaded.pdf"
         contents = await file.read()
-        with open(tmp_path, "wb") as f:
-            f.write(contents)
+
+        # Unique temp file per request, so concurrent uploads don't collide
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(contents)
+            tmp_path = tmp.name
 
         print(f"📄 PDF saved: {file.filename}")
 
@@ -93,6 +102,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         docs = splitter.split_documents(documents)
 
         vector_db = FAISS.from_documents(docs, embeddings)
+        all_docs = docs
         print(f"✅ Indexed {len(docs)} chunks")
 
         return {"status": "ok", "pages": len(documents), "chunks": len(docs)}
@@ -102,6 +112,9 @@ async def upload_pdf(file: UploadFile = File(...)):
     except Exception as e:
         print(f"❌ Upload error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 # ── Chat history message model ──
@@ -126,6 +139,11 @@ TECH_MAP = {
     "docker": "Docker", "github": "GitHub Actions", "linux": "Linux",
 }
 
+# Word-boundary match; "tech" alone is removed so "technical approach" no longer triggers it
+TECH_QUERY_PATTERN = re.compile(
+    r"\b(technology|technologies|tools|tech stack|stack|frameworks?)\b"
+)
+
 
 def extract_technologies(docs):
     found = set()
@@ -141,6 +159,28 @@ def clean_text(text):
     return text.replace("\n", " ").replace("DISCLAIMER", "").replace("\ufb01", "fi")
 
 
+def rewrite_query(query: str, history: List[ChatMessage]) -> str:
+    """Turn a follow-up into a standalone question using chat history.
+    Used ONLY for retrieval; the original question still goes to the LLM."""
+    if not history:
+        return query
+    try:
+        convo = "\n".join(f"{m.role}: {m.content}" for m in history[-HISTORY_MESSAGES:])
+        prompt = (
+            "Given the conversation and a follow-up question, rewrite the follow-up "
+            "as a standalone question that includes all needed context. "
+            "Do NOT answer it. If it is already standalone, return it unchanged. "
+            "Output only the question.\n\n"
+            f"Conversation:\n{convo}\n\n"
+            f"Follow-up: {query}\n\nStandalone question:"
+        )
+        rewritten = llm.invoke(prompt).content.strip()
+        return rewritten or query
+    except Exception as e:
+        print(f"⚠️ Rewrite failed, using original query: {e}")
+        return query
+
+
 def build_messages(context: str, query: str, history: List[ChatMessage]):
     """Build message list with system prompt + chat history + new question."""
     messages = [
@@ -153,7 +193,7 @@ def build_messages(context: str, query: str, history: List[ChatMessage]):
     ]
 
     # Add last 6 messages of history (3 exchanges) to keep context window small
-    recent_history = history[-6:] if len(history) > 6 else history
+    recent_history = history[-HISTORY_MESSAGES:]
     for msg in recent_history:
         if msg.role == "user":
             messages.append(HumanMessage(content=msg.content))
@@ -177,23 +217,25 @@ async def ask(req: AskRequest):
         if llm is None:
             raise HTTPException(status_code=503, detail="LLM not ready yet.")
 
+        # 1. Rewrite follow-ups into standalone queries for retrieval
+        search_query = rewrite_query(req.query, req.history)
+
+        # 2. Retrieve with the rewritten query
         retriever = vector_db.as_retriever(
             search_type="similarity",
-            search_kwargs={"k": 6},
+            search_kwargs={"k": TOP_K},
         )
-        retrieved = retriever.invoke(req.query)
-        print(f"🔍 Query: {req.query} | History: {len(req.history)} messages")
+        retrieved = retriever.invoke(search_query)
+        print(f"🔍 Original: {req.query} | Rewritten: {search_query} | History: {len(req.history)} msgs")
 
-        is_tech = any(
-            w in req.query.lower()
-            for w in ["technology", "technologies", "tools", "stack", "framework", "tech"]
-        )
+        is_tech = bool(TECH_QUERY_PATTERN.search(req.query.lower()))
 
         if is_tech:
-            techs = extract_technologies(retrieved)
+            # Scan ALL chunks, not just the retrieved ones
+            techs = extract_technologies(all_docs)
             answer = "\n".join(f"- {t}" for t in techs) if techs else "No technologies found."
         else:
-            context = "\n\n".join(clean_text(d.page_content) for d in retrieved[:5])
+            context = "\n\n".join(clean_text(d.page_content) for d in retrieved)
             messages = build_messages(context, req.query, req.history)
             response = llm.invoke(messages)
             answer = response.content
@@ -203,7 +245,7 @@ async def ask(req: AskRequest):
         if req.show_source:
             sources = [clean_text(d.page_content[:200]) + "…" for d in retrieved]
 
-        return {"answer": answer, "sources": sources}
+        return {"answer": answer, "sources": sources, "search_query": search_query}
 
     except HTTPException:
         raise

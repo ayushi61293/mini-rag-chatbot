@@ -40,11 +40,11 @@ HISTORY_MESSAGES = 6   # last 3 exchanges
 async def load_models():
     global embeddings, llm
     try:
-        print("⏳ Loading embedding model...")
+        print(" Loading embedding model...")
         embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
-        print("✅ Embeddings loaded")
+        print(" Embeddings loaded")
 
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
@@ -55,7 +55,7 @@ async def load_models():
             temperature=0,
             groq_api_key=api_key,
         )
-        print("✅ Groq Llama3 ready!")
+        print(" Groq Llama3 ready!")
 
     except Exception as e:
         print(f"❌ Startup error: {e}")
@@ -103,14 +103,14 @@ async def upload_pdf(file: UploadFile = File(...)):
 
         vector_db = FAISS.from_documents(docs, embeddings)
         all_docs = docs
-        print(f"✅ Indexed {len(docs)} chunks")
+        print(f" Indexed {len(docs)} chunks")
 
         return {"status": "ok", "pages": len(documents), "chunks": len(docs)}
 
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ Upload error: {e}")
+        print(f" Upload error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if tmp_path and os.path.exists(tmp_path):
@@ -250,5 +250,5 @@ async def ask(req: AskRequest):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ Ask error: {e}")
+        print(f" Ask error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
